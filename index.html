@@ -1308,7 +1308,7 @@ function budgetSpentForRange(entry, txList, paymentDateMatches) {
   if (entry.kind === "debt") {
     const d = state.debts.find((x) => x.id === entry.debtId);
     if (!d) return 0;
-    return (d.payments || []).filter((p) => paymentDateMatches(p.date)).reduce((s, p) => s + p.amount, 0);
+    return (d.payments || []).filter((p) => paymentDateMatches(p.date) && isTrackedPayment(p.id)).reduce((s, p) => s + p.amount, 0);
   }
   return 0;
 }
@@ -1786,6 +1786,12 @@ function budgetLimit(entry) {
   }
   return entry.limit || 0;
 }
+/* Un paiement ne compte dans le suivi mensuel du budget que s'il provient d'une transaction réelle
+   (catégorie « Dettes »). Le paiement initial créé via « Déjà remboursé » n'a pas de transaction liée :
+   il réduit bien le solde restant dû, mais ne doit jamais être compté comme une mensualité du mois. */
+function isTrackedPayment(paymentId) {
+  return state.transactions.some((t) => t.paymentId === paymentId);
+}
 function budgetSpent(entry, monthTx, thisMonth) {
   if (entry.kind === "category") {
     return monthTx.filter((t) => t.category === entry.category).reduce((s, t) => s + Math.abs(t.amount), 0);
@@ -1796,7 +1802,7 @@ function budgetSpent(entry, monthTx, thisMonth) {
   if (entry.kind === "debt") {
     const d = state.debts.find((x) => x.id === entry.debtId);
     if (!d) return 0;
-    return (d.payments || []).filter((p) => monthKey(p.date) === thisMonth).reduce((s, p) => s + p.amount, 0);
+    return (d.payments || []).filter((p) => monthKey(p.date) === thisMonth && isTrackedPayment(p.id)).reduce((s, p) => s + p.amount, 0);
   }
   return 0;
 }
