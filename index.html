@@ -827,14 +827,15 @@ function migrateDebts(debts) {
     payments: Array.isArray(d.payments) ? d.payments : [],
   }));
 }
-/* Total dû = capital emprunté + coût total des intérêts */
+/* Total dû = capital emprunté + coût total des intérêts (information seulement) */
 function debtTotal(d) {
   return (d.capital || 0) + (d.interest || 0);
 }
-/* Solde restant = total dû moins la somme des remboursements enregistrés */
+/* Solde restant = capital emprunté moins la somme des remboursements enregistrés
+   (les intérêts ne sont pas déduits : ils sont affichés à titre informatif uniquement) */
 function debtBalance(d) {
   const paid = (d.payments || []).reduce((s, p) => s + p.amount, 0);
-  return Math.max(0, debtTotal(d) - paid);
+  return Math.max(0, (d.capital || 0) - paid);
 }
 
 function migrate(data) {
@@ -940,6 +941,7 @@ const ICONS = {
   reset: '<svg class="icon" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 2.6-6.3M3 4v5h5"/></svg>',
   save: '<svg class="icon" viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><rect x="8" y="13" width="8" height="6"/></svg>',
   upload: '<svg class="icon" viewBox="0 0 24 24"><path d="M12 16V4M8 8l4-4 4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>',
+  edit: '<svg class="icon" viewBox="0 0 24 24"><path d="M4 20l.9-4.2L16.2 4.6a1.4 1.4 0 0 1 2 0l1.2 1.2a1.4 1.4 0 0 1 0 2L8.2 19.1z"/><path d="M14.5 6.3l3.2 3.2"/></svg>',
 };
 
 /* --------------------------------- État --------------------------------- */
@@ -948,6 +950,12 @@ let currentView = "dashboard";
 const chartInstances = {};
 let savedFileHandle = null;
 let autoSaveTimer = null;
+/* Identifiants des lignes actuellement en cours d'édition (état d'interface, non persisté) */
+const editing = { budget: null, goal: null, debt: null };
+function setEditing(kind, id) {
+  editing[kind] = id;
+  renderView();
+}
 
 function loadState() {
   try {
@@ -1139,7 +1147,7 @@ async function generateMonthlyPdf(monthStr) {
   const catEntries = Object.entries(byLabel);
 
   const totalDebt = state.debts.reduce((s, d) => s + debtBalance(d), 0);
-  const originalDebtTotal = state.debts.reduce((s, d) => s + debtTotal(d), 0);
+  const originalDebtTotal = state.debts.reduce((s, d) => s + (d.capital || 0), 0);
   const repaidAmount = Math.max(0, originalDebtTotal - totalDebt);
 
   /* ----- Génération des images de graphiques ----- */
@@ -1354,7 +1362,7 @@ async function generateYearlyPdf(yearStr) {
   });
 
   const totalDebt = state.debts.reduce((s, d) => s + debtBalance(d), 0);
-  const originalDebtTotal = state.debts.reduce((s, d) => s + debtTotal(d), 0);
+  const originalDebtTotal = state.debts.reduce((s, d) => s + (d.capital || 0), 0);
   const repaidAmount = Math.max(0, originalDebtTotal - totalDebt);
 
   /* ----- Génération des images de graphiques ----- */
@@ -1549,6 +1557,7 @@ function mount() {
   document.querySelectorAll("[data-nav]").forEach((btn) =>
     btn.addEventListener("click", () => {
       currentView = btn.getAttribute("data-nav");
+      editing.budget = null; editing.goal = null; editing.debt = null;
       renderView();
     })
   );
@@ -1649,7 +1658,7 @@ function renderDashboard(root) {
 
   /* Évolution du solde restant dû, à partir de l'historique des remboursements de toutes les dettes */
   const allPayments = state.debts.flatMap((d) => d.payments || []).sort((a, b) => a.date.localeCompare(b.date));
-  let debtRunning = state.debts.reduce((s, d) => s + debtTotal(d), 0);
+  let debtRunning = state.debts.reduce((s, d) => s + (d.capital || 0), 0);
   const debtTrend = allPayments.map((p) => { debtRunning = Math.max(0, debtRunning - p.amount); return { label: p.date.slice(5), value: debtRunning }; });
 
   /* Évolution de l'épargne, à partir des transactions de catégorie "Épargne" */
@@ -1840,6 +1849,18 @@ function renderBudget(root) {
         <h3 class="card-title">Mes enveloppes de budget</h3>
         <div class="list">
           ${state.budgets.map((b) => {
+            if (editing.budget === b.id) {
+              return `<div class="row-item">
+                <div class="row-main">
+                  <div class="row-title">${escapeHtml(budgetLabel(b))}</div>
+                  <form class="inline-form" data-edit-budget-form="${b.id}" style="border-top:none;padding-top:8px;">
+                    <input class="input" type="text" inputmode="decimal" name="limit" value="${b.limit}" placeholder="Limite mensuelle (€)" required />
+                    <button class="btn-primary" type="submit">${ICONS.save} Enregistrer</button>
+                    <button class="btn-secondary" type="button" data-cancel-edit-budget="${b.id}">Annuler</button>
+                  </form>
+                </div>
+              </div>`;
+            }
             const spent = budgetSpent(b, monthTx, thisMonth);
             const pct = b.limit > 0 ? Math.min(100, (spent / b.limit) * 100) : 0;
             const over = spent > b.limit;
@@ -1849,7 +1870,10 @@ function renderBudget(root) {
                 <div class="pbar-track"><div class="pbar-fill" style="width:${pct}%;background:${over ? PALETTE.coral : budgetColor(b)}"></div></div>
                 <div class="row-sub mono">${fmt(spent)} / ${fmt(b.limit)}</div>
               </div>
-              <button class="icon-btn" data-del-budget="${b.id}">${ICONS.trash}</button>
+              <div class="row-actions">
+                <button class="icon-btn" data-edit-budget="${b.id}">${ICONS.edit}</button>
+                <button class="icon-btn" data-del-budget="${b.id}">${ICONS.trash}</button>
+              </div>
             </div>`;
           }).join("")}
         </div>
@@ -1901,6 +1925,23 @@ function renderBudget(root) {
   root.querySelectorAll("[data-del-budget]").forEach((btn) =>
     btn.addEventListener("click", () => deleteBudgetEntry(btn.dataset.delBudget))
   );
+  root.querySelectorAll("[data-edit-budget]").forEach((btn) =>
+    btn.addEventListener("click", () => setEditing("budget", btn.dataset.editBudget))
+  );
+  root.querySelectorAll("[data-cancel-edit-budget]").forEach((btn) =>
+    btn.addEventListener("click", () => setEditing("budget", null))
+  );
+  root.querySelectorAll("[data-edit-budget-form]").forEach((form) =>
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const id = form.dataset.editBudgetForm;
+      const fd = new FormData(e.target);
+      const limit = parseDecimal(fd.get("limit"));
+      if (!limit) return;
+      editing.budget = null;
+      persist({ ...state, budgets: state.budgets.map((b) => b.id === id ? { ...b, limit } : b) });
+    })
+  );
   root.querySelector("#form-budget").addEventListener("submit", (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -1935,6 +1976,18 @@ function renderSavings(root) {
         <div class="row-sub mono" style="margin-bottom:12px;">Total épargné : ${fmt(total)} / ${fmt(totalTarget)}</div>
         ${state.savingsGoals.length === 0 ? `<div class="empty-state">Aucun objectif d'épargne. Créez-en un ci-dessous pour commencer à suivre vos progrès.</div>` : `<div class="list">
           ${state.savingsGoals.map((g) => {
+            if (editing.goal === g.id) {
+              return `<div class="row-item">
+                <div class="row-main">
+                  <form class="inline-form" data-edit-goal-form="${g.id}" style="border-top:none;padding-top:8px;">
+                    <input class="input" name="name" value="${escapeHtml(g.name)}" placeholder="Nom de l'objectif" required />
+                    <input class="input" type="text" inputmode="decimal" name="target" value="${g.target}" placeholder="Objectif (€)" required />
+                    <button class="btn-primary" type="submit">${ICONS.save} Enregistrer</button>
+                    <button class="btn-secondary" type="button" data-cancel-edit-goal="${g.id}">Annuler</button>
+                  </form>
+                </div>
+              </div>`;
+            }
             const pct = g.target > 0 ? Math.min(100, (g.current / g.target) * 100) : 0;
             return `<div class="row-item">
               <div class="row-main">
@@ -1943,6 +1996,7 @@ function renderSavings(root) {
                 <div class="row-sub mono">${fmt(g.current)} / ${fmt(g.target)}</div>
               </div>
               <div class="row-actions">
+                <button class="icon-btn" data-edit-goal="${g.id}">${ICONS.edit}</button>
                 <button class="icon-btn" data-del-goal="${g.id}">${ICONS.trash}</button>
               </div>
             </div>`;
@@ -1976,6 +2030,24 @@ function renderSavings(root) {
   root.querySelectorAll("[data-del-goal]").forEach((btn) =>
     btn.addEventListener("click", () => persist({ ...state, savingsGoals: state.savingsGoals.filter((g) => g.id !== btn.dataset.delGoal) }))
   );
+  root.querySelectorAll("[data-edit-goal]").forEach((btn) =>
+    btn.addEventListener("click", () => setEditing("goal", btn.dataset.editGoal))
+  );
+  root.querySelectorAll("[data-cancel-edit-goal]").forEach((btn) =>
+    btn.addEventListener("click", () => setEditing("goal", null))
+  );
+  root.querySelectorAll("[data-edit-goal-form]").forEach((form) =>
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const id = form.dataset.editGoalForm;
+      const fd = new FormData(e.target);
+      const name = fd.get("name").trim();
+      const target = parseDecimal(fd.get("target"));
+      if (!name || !target) return;
+      editing.goal = null;
+      persist({ ...state, savingsGoals: state.savingsGoals.map((g) => g.id === id ? { ...g, name, target } : g) });
+    })
+  );
   root.querySelector("#form-goal").addEventListener("submit", (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -2004,7 +2076,7 @@ function toggleDebtBudget(debtId) {
 
 function renderDebts(root) {
   const totalDebt = state.debts.reduce((s, d) => s + debtBalance(d), 0);
-  const originalTotal = state.debts.reduce((s, d) => s + debtTotal(d), 0);
+  const originalTotal = state.debts.reduce((s, d) => s + (d.capital || 0), 0);
   const repaidAmount = Math.max(0, originalTotal - totalDebt);
   const repaidPct = originalTotal > 0 ? Math.round((repaidAmount / originalTotal) * 100) : 0;
 
@@ -2046,7 +2118,25 @@ function renderDebts(root) {
         <h3 class="card-title">Mes dettes</h3>
         <div class="list">
           ${state.debts.map((d) => {
-            const orig = debtTotal(d);
+            if (editing.debt === d.id) {
+              return `<div class="row-item">
+                <div class="row-main">
+                  <div class="row-title">${escapeHtml(d.name)}</div>
+                  <form class="inline-form" data-edit-debt-form="${d.id}" style="border-top:none;padding-top:8px;">
+                    <input class="input" name="name" value="${escapeHtml(d.name)}" placeholder="Crédit/Dette" required />
+                    <input class="input" type="text" inputmode="decimal" name="capital" value="${d.capital}" placeholder="Capital (€)" required />
+                    <input class="input" type="text" inputmode="decimal" name="interest" value="${d.interest || 0}" placeholder="Intérêts (€)" />
+                    <input class="input" type="text" inputmode="decimal" name="durationMonths" value="${d.durationMonths || ""}" placeholder="Durée (en mois)" />
+                    <input class="input" type="text" inputmode="decimal" name="rate" value="${d.rate || 0}" placeholder="Taux (%)" />
+                    <input class="input" type="text" inputmode="decimal" name="minPayment" value="${d.minPayment || 0}" placeholder="Mensualité (€)" />
+                    <button class="btn-primary" type="submit">${ICONS.save} Enregistrer</button>
+                    <button class="btn-secondary" type="button" data-cancel-edit-debt="${d.id}">Annuler</button>
+                  </form>
+                  <p class="hint-text">Le « déjà remboursé » ne se modifie pas ici : ajoutez une transaction de catégorie « Dettes » pour enregistrer un remboursement.</p>
+                </div>
+              </div>`;
+            }
+            const orig = (d.capital || 0);
             const balance = debtBalance(d);
             const pct = orig > 0 ? Math.min(100, Math.max(0, ((orig - balance) / orig) * 100)) : 0;
             return `<div class="row-item">
@@ -2062,6 +2152,7 @@ function renderDebts(root) {
                 </label>
               </div>
               <div class="row-actions">
+                <button class="icon-btn" data-edit-debt="${d.id}">${ICONS.edit}</button>
                 <button class="icon-btn" data-del-debt="${d.id}">${ICONS.trash}</button>
               </div>
             </div>`;
@@ -2134,6 +2225,32 @@ function renderDebts(root) {
       debts: state.debts.filter((d) => d.id !== btn.dataset.delDebt),
       budgets: state.budgets.filter((b) => !(b.kind === "debt" && b.debtId === btn.dataset.delDebt)),
     }))
+  );
+  root.querySelectorAll("[data-edit-debt]").forEach((btn) =>
+    btn.addEventListener("click", () => setEditing("debt", btn.dataset.editDebt))
+  );
+  root.querySelectorAll("[data-cancel-edit-debt]").forEach((btn) =>
+    btn.addEventListener("click", () => setEditing("debt", null))
+  );
+  root.querySelectorAll("[data-edit-debt-form]").forEach((form) =>
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const id = form.dataset.editDebtForm;
+      const fd = new FormData(e.target);
+      const name = fd.get("name").trim();
+      const capital = parseDecimal(fd.get("capital"));
+      if (!name || !capital) return;
+      const interest = parseDecimal(fd.get("interest")) || 0;
+      const durationMonths = parseDecimal(fd.get("durationMonths")) || null;
+      const rate = parseDecimal(fd.get("rate")) || 0;
+      const minPayment = parseDecimal(fd.get("minPayment")) || 0;
+      editing.debt = null;
+      persist({
+        ...state,
+        debts: state.debts.map((d) => d.id === id ? { ...d, name, capital, interest, durationMonths, rate, minPayment } : d),
+        budgets: state.budgets.map((b) => (b.kind === "debt" && b.debtId === id) ? { ...b, limit: minPayment } : b),
+      });
+    })
   );
   root.querySelector("#form-debt").addEventListener("submit", (e) => {
     e.preventDefault();
