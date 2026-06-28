@@ -1647,6 +1647,16 @@ function renderDashboard(root) {
   let running = 0;
   const trend = sortedTx.map((t) => { running += t.amount; return { label: t.date.slice(5), value: running }; });
 
+  /* Évolution du solde restant dû, à partir de l'historique des remboursements de toutes les dettes */
+  const allPayments = state.debts.flatMap((d) => d.payments || []).sort((a, b) => a.date.localeCompare(b.date));
+  let debtRunning = state.debts.reduce((s, d) => s + debtTotal(d), 0);
+  const debtTrend = allPayments.map((p) => { debtRunning = Math.max(0, debtRunning - p.amount); return { label: p.date.slice(5), value: debtRunning }; });
+
+  /* Évolution de l'épargne, à partir des transactions de catégorie "Épargne" */
+  const epargneTx = state.transactions.filter((t) => t.category === "Épargne").sort((a, b) => a.date.localeCompare(b.date));
+  let savingsRunning = 0;
+  const savingsTrend = epargneTx.map((t) => { savingsRunning += Math.abs(t.amount); return { label: t.date.slice(5), value: savingsRunning }; });
+
   root.innerHTML = `
     <div class="view-stack">
       <div class="stat-row">
@@ -1676,6 +1686,16 @@ function renderDashboard(root) {
           ${trend.length < 2 ? `<div class="empty-state">Ajoutez davantage de transactions pour suivre la tendance de votre solde.</div>` : `<div class="chart-wrap"><canvas id="chart-trend"></canvas></div>`}
         </div>
       </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3 class="card-title">Évolution des dettes</h3>
+          ${debtTrend.length < 2 ? `<div class="empty-state">Ajoutez des remboursements (onglet Dettes ou Transactions) pour suivre cette tendance.</div>` : `<div class="chart-wrap"><canvas id="chart-debt-trend"></canvas></div>`}
+        </div>
+        <div class="card">
+          <h3 class="card-title">Évolution de l'épargne</h3>
+          ${savingsTrend.length < 2 ? `<div class="empty-state">Ajoutez des transactions de catégorie « Épargne » pour suivre cette tendance.</div>` : `<div class="chart-wrap"><canvas id="chart-savings-trend"></canvas></div>`}
+        </div>
+      </div>
     </div>
   `;
 
@@ -1697,6 +1717,28 @@ function renderDashboard(root) {
     chartInstances.trend = new Chart(document.getElementById("chart-trend"), {
       type: "line",
       data: { labels: trend.map((t) => t.label), datasets: [{ data: trend.map((t) => t.value), borderColor: PALETTE.primary, backgroundColor: rgba(PALETTE.primary, 0.08), fill: true, borderWidth: 2.5, tension: 0.35, pointRadius: 0 }] },
+      options: {
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => fmt(ctx.parsed.y) } } },
+        scales: { x: { ticks: { font: { family: "JetBrains Mono", size: 11 } }, grid: { display: false } }, y: { ticks: { font: { family: "JetBrains Mono", size: 11 } }, grid: { color: PALETTE.line } } },
+        maintainAspectRatio: false,
+      },
+    });
+  }
+  if (debtTrend.length >= 2) {
+    chartInstances.debtTrend = new Chart(document.getElementById("chart-debt-trend"), {
+      type: "line",
+      data: { labels: debtTrend.map((t) => t.label), datasets: [{ data: debtTrend.map((t) => t.value), borderColor: PALETTE.coral, backgroundColor: rgba(PALETTE.coral, 0.08), fill: true, borderWidth: 2.5, tension: 0.35, pointRadius: 0 }] },
+      options: {
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => fmt(ctx.parsed.y) } } },
+        scales: { x: { ticks: { font: { family: "JetBrains Mono", size: 11 } }, grid: { display: false } }, y: { ticks: { font: { family: "JetBrains Mono", size: 11 } }, grid: { color: PALETTE.line } } },
+        maintainAspectRatio: false,
+      },
+    });
+  }
+  if (savingsTrend.length >= 2) {
+    chartInstances.savingsTrend = new Chart(document.getElementById("chart-savings-trend"), {
+      type: "line",
+      data: { labels: savingsTrend.map((t) => t.label), datasets: [{ data: savingsTrend.map((t) => t.value), borderColor: PALETTE.amber, backgroundColor: rgba(PALETTE.amber, 0.1), fill: true, borderWidth: 2.5, tension: 0.35, pointRadius: 0 }] },
       options: {
         plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => fmt(ctx.parsed.y) } } },
         scales: { x: { ticks: { font: { family: "JetBrains Mono", size: 11 } }, grid: { display: false } }, y: { ticks: { font: { family: "JetBrains Mono", size: 11 } }, grid: { color: PALETTE.line } } },
@@ -1756,12 +1798,44 @@ function renderBudget(root) {
   const thisMonth = monthKey(todayISO());
   const monthTx = state.transactions.filter((t) => monthKey(t.date) === thisMonth);
 
+  const revenusMonth = monthTx.filter((t) => t.category === "Revenus").reduce((s, t) => s + t.amount, 0);
+  const fixesMonth = monthTx.filter((t) => t.category === "Charges fixes").reduce((s, t) => s + Math.abs(t.amount), 0);
+  const variablesMonth = monthTx.filter((t) => t.category === "Charges variables").reduce((s, t) => s + Math.abs(t.amount), 0);
+  const dettesMonth = monthTx.filter((t) => t.category === "Dettes").reduce((s, t) => s + Math.abs(t.amount), 0);
+  const epargneMonth = monthTx.filter((t) => t.category === "Épargne").reduce((s, t) => s + Math.abs(t.amount), 0);
+  const hasOverview = fixesMonth + variablesMonth + dettesMonth + epargneMonth > 0;
+
   root.innerHTML = `
     <div class="view-stack">
-      <div class="card">
-        <h3 class="card-title">Budget vs dépenses réelles — ${capitalize(formatMonthLabel(thisMonth))}</h3>
-        ${state.budgets.length === 0 ? `<div class="empty-state">Aucune enveloppe définie. Créez-en une ci-dessous.</div>` : `<div class="chart-wrap"><canvas id="chart-budget"></canvas></div>`}
+      <div class="stat-row">
+        <div class="card stat-card">
+          <div class="stat-chip" style="background:${rgba(PALETTE.mint, 0.14)};color:${PALETTE.mint}">${ICONS.up}</div>
+          <div class="stat-eyebrow">Revenus du mois</div>
+          <div class="stat-number" style="color:${PALETTE.mint}">${fmt2(revenusMonth)}</div>
+        </div>
+        <div class="card stat-card">
+          <div class="stat-chip" style="background:${rgba(PALETTE.primary, 0.12)};color:${PALETTE.primary}">${ICONS.wallet}</div>
+          <div class="stat-eyebrow">Charges fixes du mois</div>
+          <div class="stat-number" style="color:${PALETTE.primary}">${fmt2(fixesMonth)}</div>
+        </div>
+        <div class="card stat-card">
+          <div class="stat-chip" style="background:${rgba(PALETTE.amber, 0.16)};color:${PALETTE.amber}">${ICONS.receipt}</div>
+          <div class="stat-eyebrow">Charges variables du mois</div>
+          <div class="stat-number" style="color:${PALETTE.amber}">${fmt2(variablesMonth)}</div>
+        </div>
       </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3 class="card-title">Budget vs dépenses réelles — ${capitalize(formatMonthLabel(thisMonth))}</h3>
+          ${state.budgets.length === 0 ? `<div class="empty-state">Aucune enveloppe définie. Créez-en une ci-dessous.</div>` : `<div class="chart-wrap"><canvas id="chart-budget"></canvas></div>`}
+        </div>
+        <div class="card">
+          <h3 class="card-title">Vue d'ensemble du mois</h3>
+          ${!hasOverview ? `<div class="empty-state">Ajoutez des transactions (charges, dettes, épargne) pour voir leur répartition ici.</div>` : `<div class="chart-wrap"><canvas id="chart-overview"></canvas></div>`}
+        </div>
+      </div>
+
       <div class="card">
         <h3 class="card-title">Mes enveloppes de budget</h3>
         <div class="list">
@@ -1806,6 +1880,23 @@ function renderBudget(root) {
       },
     });
   }
+  if (hasOverview) {
+    chartInstances.overview = new Chart(document.getElementById("chart-overview"), {
+      type: "doughnut",
+      data: {
+        labels: ["Charges fixes", "Charges variables", "Dettes", "Épargne"],
+        datasets: [{
+          data: [fixesMonth, variablesMonth, dettesMonth, epargneMonth],
+          backgroundColor: [PALETTE.primary, PALETTE.amber, PALETTE.coral, PALETTE.cyan],
+          borderColor: PALETTE.surface, borderWidth: 2,
+        }],
+      },
+      options: {
+        plugins: { legend: { position: "bottom", labels: { font: { size: 12 } } }, tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmt(ctx.parsed)}` } } },
+        maintainAspectRatio: false,
+      },
+    });
+  }
 
   root.querySelectorAll("[data-del-budget]").forEach((btn) =>
     btn.addEventListener("click", () => deleteBudgetEntry(btn.dataset.delBudget))
@@ -1825,9 +1916,20 @@ function renderBudget(root) {
 function renderSavings(root) {
   const total = state.savingsGoals.reduce((s, g) => s + g.current, 0);
   const totalTarget = state.savingsGoals.reduce((s, g) => s + g.target, 0);
+  const globalPct = totalTarget > 0 ? Math.min(100, (total / totalTarget) * 100) : null;
 
   root.innerHTML = `
-    <div class="view-stack">
+    <div class="grid-2">
+      <div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;">
+        <h3 class="card-title" style="align-self:flex-start;">Avancée générale de l'épargne</h3>
+        ${globalPct === null ? `<div class="empty-state">Créez un objectif d'épargne pour voir votre avancée globale ici.</div>` : `
+          <div class="stat-chip" style="background:${rgba(PALETTE.amber, 0.16)};color:${PALETTE.amber}">${ICONS.piggy}</div>
+          <div class="stat-eyebrow">Objectifs atteints à</div>
+          <div class="stat-number" style="color:${PALETTE.amber}">${globalPct.toFixed(1)}%</div>
+          <div class="chart-wrap" style="height:170px;width:100%;"><canvas id="chart-savings-progress"></canvas></div>
+          <div class="row-sub mono" style="text-align:center;">${fmt(total)} / ${fmt(totalTarget)}</div>
+        `}
+      </div>
       <div class="card">
         <h3 class="card-title">Objectifs d'épargne</h3>
         <div class="row-sub mono" style="margin-bottom:12px;">Total épargné : ${fmt(total)} / ${fmt(totalTarget)}</div>
@@ -1841,7 +1943,6 @@ function renderSavings(root) {
                 <div class="row-sub mono">${fmt(g.current)} / ${fmt(g.target)}</div>
               </div>
               <div class="row-actions">
-                <button class="icon-btn" title="Ajouter 50 €" data-contribute="${g.id}">${ICONS.plus}</button>
                 <button class="icon-btn" data-del-goal="${g.id}">${ICONS.trash}</button>
               </div>
             </div>`;
@@ -1852,13 +1953,26 @@ function renderSavings(root) {
           <input class="input" type="text" inputmode="decimal" name="target" placeholder="Objectif (€)" required />
           <button class="btn-primary" type="submit">${ICONS.plus} Créer</button>
         </form>
+        <p class="hint-text">Pour faire évoluer un objectif, ajoutez une transaction de catégorie « Épargne » dans l'onglet Transactions.</p>
       </div>
     </div>
   `;
 
-  root.querySelectorAll("[data-contribute]").forEach((btn) =>
-    btn.addEventListener("click", () => persist({ ...state, savingsGoals: state.savingsGoals.map((g) => g.id === btn.dataset.contribute ? { ...g, current: g.current + 50 } : g) }))
-  );
+  if (globalPct !== null) {
+    chartInstances.savingsProgress = new Chart(document.getElementById("chart-savings-progress"), {
+      type: "doughnut",
+      data: {
+        labels: ["Épargné", "Restant"],
+        datasets: [{ data: [total, Math.max(0, totalTarget - total)], backgroundColor: [PALETTE.amber, PALETTE.surfaceSoft], borderColor: PALETTE.surface, borderWidth: 2 }],
+      },
+      options: {
+        cutout: "72%",
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmt(ctx.parsed)}` } } },
+        maintainAspectRatio: false,
+      },
+    });
+  }
+
   root.querySelectorAll("[data-del-goal]").forEach((btn) =>
     btn.addEventListener("click", () => persist({ ...state, savingsGoals: state.savingsGoals.filter((g) => g.id !== btn.dataset.delGoal) }))
   );
@@ -1948,7 +2062,6 @@ function renderDebts(root) {
                 </label>
               </div>
               <div class="row-actions">
-                <button class="icon-btn" title="Rembourser 100 €" data-paydown="${d.id}">${ICONS.down}</button>
                 <button class="icon-btn" data-del-debt="${d.id}">${ICONS.trash}</button>
               </div>
             </div>`;
@@ -1964,6 +2077,7 @@ function renderDebts(root) {
           <input class="input" type="text" inputmode="decimal" name="alreadyRepaid" placeholder="Déjà remboursé (€)" />
           <button class="btn-primary" type="submit">${ICONS.plus} Ajouter</button>
         </form>
+        <p class="hint-text">Pour enregistrer un remboursement, ajoutez une transaction de catégorie « Dettes » dans l'onglet Transactions.</p>
       </div>
     </div>
   `;
@@ -2013,16 +2127,6 @@ function renderDebts(root) {
 
   root.querySelectorAll("[data-toggle-budget]").forEach((cb) =>
     cb.addEventListener("change", () => toggleDebtBudget(cb.dataset.toggleBudget))
-  );
-  root.querySelectorAll("[data-paydown]").forEach((btn) =>
-    btn.addEventListener("click", () => persist({
-      ...state,
-      debts: state.debts.map((d) => {
-        if (d.id !== btn.dataset.paydown) return d;
-        const balance = debtBalance(d);
-        return { ...d, payments: [...(d.payments || []), { id: uid(), date: todayISO(), amount: Math.min(100, balance) }] };
-      }),
-    }))
   );
   root.querySelectorAll("[data-del-debt]").forEach((btn) =>
     btn.addEventListener("click", () => persist({
@@ -2090,6 +2194,12 @@ function deleteTransaction(id) {
 
 function renderTransactions(root) {
   const sorted = [...state.transactions].sort((a, b) => b.date.localeCompare(a.date));
+  const thisMonth = monthKey(todayISO());
+  const monthTx = state.transactions.filter((t) => monthKey(t.date) === thisMonth);
+  const varianceData = state.budgets.map((b) => {
+    const spent = budgetSpent(b, monthTx, thisMonth);
+    return { label: budgetLabel(b), diff: b.limit - spent };
+  });
 
   root.innerHTML = `
     <div class="view-stack">
@@ -2109,6 +2219,10 @@ function renderTransactions(root) {
         <p class="hint-text">Choisir « Épargne » ajoute le montant à l'objectif sélectionné ; choisir « Dettes » l'enregistre comme un remboursement — les graphiques des deux onglets se mettent à jour automatiquement.</p>
       </div>
       <div class="card">
+        <h3 class="card-title">Écart budget / réel — ${capitalize(formatMonthLabel(thisMonth))}</h3>
+        ${varianceData.length === 0 ? `<div class="empty-state">Créez des enveloppes de budget (onglet Budget) pour voir l'écart ici.</div>` : `<div class="chart-wrap"><canvas id="chart-variance"></canvas></div>`}
+      </div>
+      <div class="card">
         <h3 class="card-title">Historique (${sorted.length})</h3>
         ${sorted.length === 0 ? `<div class="empty-state">Aucune transaction enregistrée. Ajoutez votre première transaction ci-dessus.</div>` : `<div class="list">
           ${sorted.map((t) => {
@@ -2125,6 +2239,28 @@ function renderTransactions(root) {
       </div>
     </div>
   `;
+
+  if (varianceData.length > 0) {
+    chartInstances.variance = new Chart(document.getElementById("chart-variance"), {
+      type: "bar",
+      data: {
+        labels: varianceData.map((v) => v.label),
+        datasets: [{
+          data: varianceData.map((v) => v.diff),
+          backgroundColor: varianceData.map((v) => v.diff >= 0 ? PALETTE.mint : PALETTE.coral),
+          borderRadius: 6,
+        }],
+      },
+      options: {
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => (ctx.parsed.y >= 0 ? "Reste : " : "Dépassement : ") + fmt(Math.abs(ctx.parsed.y)) } },
+        },
+        scales: { x: { ticks: { font: { size: 11 } }, grid: { display: false } }, y: { ticks: { font: { family: "JetBrains Mono", size: 11 } }, grid: { color: PALETTE.line } } },
+        maintainAspectRatio: false,
+      },
+    });
+  }
 
   const categorySelect = root.querySelector("#tx-category");
   const subcategorySelect = root.querySelector("#tx-subcategory");
