@@ -2492,9 +2492,10 @@ function renderSimulator(root) {
       <div class="mode-toggle" style="max-width:280px;">
         <button type="button" class="mode-btn active">Immobilier</button>
       </div>
-      <div class="mode-toggle" id="sim-tool-toggle" style="max-width:380px;">
+      <div class="mode-toggle" id="sim-tool-toggle" style="max-width:560px;">
         <button type="button" class="mode-btn ${simTool === "credit" ? "active" : ""}" data-tool="credit">Crédit immobilier</button>
         <button type="button" class="mode-btn ${simTool === "rent" ? "active" : ""}" data-tool="rent">Acheter ou louer</button>
+        <button type="button" class="mode-btn ${simTool === "notaire" ? "active" : ""}" data-tool="notaire">Frais de notaire</button>
       </div>
       <div id="sim-tool-root"></div>
     </div>
@@ -2503,9 +2504,11 @@ function renderSimulator(root) {
   function paintTool() {
     if (chartInstances.creditAmort) { chartInstances.creditAmort.destroy(); delete chartInstances.creditAmort; }
     if (chartInstances.buyRent) { chartInstances.buyRent.destroy(); delete chartInstances.buyRent; }
+    if (chartInstances.notaire) { chartInstances.notaire.destroy(); delete chartInstances.notaire; }
     const toolRoot = root.querySelector("#sim-tool-root");
     if (simTool === "credit") renderCreditSimulator(toolRoot);
-    else renderBuyRentSimulator(toolRoot);
+    else if (simTool === "rent") renderBuyRentSimulator(toolRoot);
+    else renderNotaireSimulator(toolRoot);
   }
 
   root.querySelectorAll("#sim-tool-toggle .mode-btn").forEach((btn) =>
@@ -2752,6 +2755,127 @@ function renderBuyRentSimulator(root) {
   }
 
   root.querySelector("#rent-form").addEventListener("input", recompute);
+  recompute();
+}
+
+/* ----- Outil 3 : Frais de notaire ----- */
+const NOTAIRE_BAREME = [
+  { max: 6500, rate: 0.03870 },
+  { max: 17000, rate: 0.01596 },
+  { max: 60000, rate: 0.01064 },
+  { max: Infinity, rate: 0.00799 },
+];
+/* Émoluments du notaire (hors taxes), calculés par tranches sur le prix du bien — barème réglementé */
+function emolumentsNotaireHT(prix) {
+  let remaining = Math.max(0, prix), prevMax = 0, total = 0;
+  for (const t of NOTAIRE_BAREME) {
+    const trancheSize = Math.min(remaining, t.max - prevMax);
+    if (trancheSize > 0) total += trancheSize * t.rate;
+    remaining -= trancheSize;
+    prevMax = t.max;
+    if (remaining <= 0) break;
+  }
+  return total;
+}
+
+function renderNotaireSimulator(root) {
+  root.innerHTML = `
+    <div class="view-stack">
+      <div class="grid-2">
+        <div class="card">
+          <h3 class="card-title">Paramètres de l'achat</h3>
+          <form id="notaire-form" style="display:flex;flex-direction:column;gap:12px;">
+            ${field("Prix du bien (€)", "prix", "250000")}
+            <div>
+              <label class="row-sub" style="display:block;margin-bottom:4px;">Type de bien</label>
+              <select class="input" style="width:100%;" name="type" id="notaire-type">
+                <option value="ancien">Ancien</option>
+                <option value="neuf">Neuf (VEFA)</option>
+              </select>
+            </div>
+            ${field("Taux des droits de mutation (%)", "tauxDroits", "5.80665")}
+            ${field("Débours estimés (€)", "debours", "800")}
+          </form>
+          <p class="hint-text">Le taux des droits de mutation varie légèrement selon le département (la majorité applique 5,80665 % pour l'ancien, quelques départements appliquent 5,09 %). Pour un bien neuf, ce taux est remplacé par la taxe de publicité foncière, beaucoup plus faible (environ 0,715 %).</p>
+        </div>
+        <div class="card">
+          <h3 class="card-title">Estimation des frais d'acquisition</h3>
+          <div id="notaire-results"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Répartition des frais</h3>
+        <div class="chart-wrap" style="height:260px;"><canvas id="chart-notaire"></canvas></div>
+      </div>
+    </div>
+  `;
+
+  const typeSelect = root.querySelector("#notaire-type");
+  const droitsInput = root.querySelector('[name="tauxDroits"]');
+  typeSelect.addEventListener("change", () => {
+    droitsInput.value = typeSelect.value === "neuf" ? "0.71498" : "5.80665";
+    recompute();
+  });
+
+  function recompute() {
+    const fd = new FormData(root.querySelector("#notaire-form"));
+    const prix = parseDecimal(fd.get("prix")) || 0;
+    const tauxDroits = parseDecimal(fd.get("tauxDroits")) || 0;
+    const debours = parseDecimal(fd.get("debours")) || 0;
+    const resultsEl = root.querySelector("#notaire-results");
+
+    if (prix <= 0) {
+      resultsEl.innerHTML = `<div class="empty-state">Renseignez un prix de bien valide.</div>`;
+      if (chartInstances.notaire) { chartInstances.notaire.destroy(); delete chartInstances.notaire; }
+      return;
+    }
+
+    const droitsMutation = prix * (tauxDroits / 100);
+    const csi = Math.max(15, prix * 0.001);
+    const emolumentsHT = emolumentsNotaireHT(prix);
+    const emolumentsTTC = emolumentsHT * 1.20;
+    const total = droitsMutation + csi + emolumentsTTC + debours;
+    const pctPrix = (total / prix) * 100;
+
+    resultsEl.innerHTML = `
+      <div class="stat-row" style="grid-template-columns:1fr 1fr;">
+        <div class="stat-card">
+          <div class="stat-eyebrow">Total des frais d'acquisition</div>
+          <div class="stat-number" style="font-size:21px;color:${PALETTE.primary}">${fmt2(total)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-eyebrow">Soit, du prix du bien</div>
+          <div class="stat-number" style="font-size:21px;">${pctPrix.toFixed(2)}%</div>
+        </div>
+      </div>
+      <div class="list" style="margin-top:8px;">
+        <div class="row-item"><div class="row-main"><div class="row-title">Droits d'enregistrement / taxe de publicité foncière</div></div><div class="row-amount mono" style="color:${PALETTE.coral}">${fmt2(droitsMutation)}</div></div>
+        <div class="row-item"><div class="row-main"><div class="row-title">Émoluments du notaire (TTC)</div></div><div class="row-amount mono" style="color:${PALETTE.primary}">${fmt2(emolumentsTTC)}</div></div>
+        <div class="row-item"><div class="row-main"><div class="row-title">Contribution de sécurité immobilière</div></div><div class="row-amount mono" style="color:${PALETTE.amber}">${fmt2(csi)}</div></div>
+        <div class="row-item"><div class="row-main"><div class="row-title">Débours (estimation)</div></div><div class="row-amount mono" style="color:${PALETTE.cyan}">${fmt2(debours)}</div></div>
+      </div>
+      <p class="hint-text">Estimation indicative. Les émoluments peuvent faire l'objet d'une remise (jusqu'à 20 %) sur la part dépassant 100 000 €, à la discrétion du notaire ; les débours réels dépendent des documents nécessaires au dossier.</p>
+    `;
+
+    if (chartInstances.notaire) chartInstances.notaire.destroy();
+    chartInstances.notaire = new Chart(root.querySelector("#chart-notaire"), {
+      type: "doughnut",
+      data: {
+        labels: ["Droits / taxe de publicité foncière", "Émoluments du notaire (TTC)", "CSI", "Débours"],
+        datasets: [{
+          data: [droitsMutation, emolumentsTTC, csi, debours],
+          backgroundColor: [PALETTE.coral, PALETTE.primary, PALETTE.amber, PALETTE.cyan],
+          borderColor: PALETTE.surface, borderWidth: 2,
+        }],
+      },
+      options: {
+        plugins: { legend: { position: "bottom", labels: { font: { size: 12 } } }, tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmt(ctx.parsed)}` } } },
+        maintainAspectRatio: false,
+      },
+    });
+  }
+
+  root.querySelector("#notaire-form").addEventListener("input", recompute);
   recompute();
 }
 
