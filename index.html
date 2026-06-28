@@ -942,6 +942,7 @@ const ICONS = {
   save: '<svg class="icon" viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><rect x="8" y="13" width="8" height="6"/></svg>',
   upload: '<svg class="icon" viewBox="0 0 24 24"><path d="M12 16V4M8 8l4-4 4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>',
   edit: '<svg class="icon" viewBox="0 0 24 24"><path d="M4 20l.9-4.2L16.2 4.6a1.4 1.4 0 0 1 2 0l1.2 1.2a1.4 1.4 0 0 1 0 2L8.2 19.1z"/><path d="M14.5 6.3l3.2 3.2"/></svg>',
+  calculator: '<svg class="icon" viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2"/><rect x="7" y="5" width="10" height="4" rx="0.6"/><circle cx="7.5" cy="13" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="13" r="1" fill="currentColor" stroke="none"/><circle cx="16.5" cy="13" r="1" fill="currentColor" stroke="none"/><circle cx="7.5" cy="17" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/><circle cx="16.5" cy="17" r="1" fill="currentColor" stroke="none"/></svg>',
 };
 
 /* --------------------------------- État --------------------------------- */
@@ -1166,7 +1167,7 @@ async function generateMonthlyPdf(monthStr) {
     chartImages.budget = await renderChartImage("bar", {
       labels: state.budgets.map((b) => budgetLabel(b)),
       datasets: [
-        { label: "Budget", data: state.budgets.map((b) => b.limit), backgroundColor: "#EEF0FA" },
+        { label: "Budget", data: state.budgets.map((b) => budgetLimit(b)), backgroundColor: "#EEF0FA" },
         { label: "Dépensé", data: state.budgets.map((b) => budgetSpent(b, monthTx, monthStr)), backgroundColor: "#5B5FEF" },
       ],
     }, { plugins: { legend: { position: "bottom", labels: { font: { size: 13 } } } }, scales: { x: { ticks: { font: { size: 11 } } } } }, 760, 420);
@@ -1229,7 +1230,7 @@ async function generateMonthlyPdf(monthStr) {
       y = ensureSpace(y);
       const spent = budgetSpent(b, monthTx, monthStr);
       doc.text(truncate(budgetLabel(b), 40), marginX, y);
-      doc.text(`${fmtPdf(spent)} / ${fmtPdf(b.limit)}`, marginX + 280, y);
+      doc.text(`${fmtPdf(spent)} / ${fmtPdf(budgetLimit(b))}`, marginX + 280, y);
       y += 15;
     });
   }
@@ -1428,7 +1429,7 @@ async function generateYearlyPdf(yearStr) {
     state.budgets.forEach((b) => {
       y = ensureSpace(y);
       const spent = budgetSpentForRange(b, yearTx, (d) => d.slice(0, 4) === yearStr);
-      const annualLimit = b.limit * 12;
+      const annualLimit = budgetLimit(b) * 12;
       doc.text(truncate(budgetLabel(b), 40), marginX, y);
       doc.text(`${fmtPdf(spent)} / ${fmtPdf(annualLimit)}`, marginX + 280, y);
       y += 15;
@@ -1501,6 +1502,7 @@ const NAV = [
   { key: "savings", label: "Épargne", icon: "piggy" },
   { key: "debts", label: "Dettes", icon: "card" },
   { key: "transactions", label: "Transactions", icon: "receipt" },
+  { key: "simulator", label: "Simulateur", icon: "calculator" },
   { key: "config", label: "Configuration", icon: "settings" },
 ];
 
@@ -1631,6 +1633,7 @@ function renderView() {
     savings: renderSavings,
     debts: renderDebts,
     transactions: renderTransactions,
+    simulator: renderSimulator,
     config: renderConfig,
   };
   renderers[currentView](root);
@@ -1770,6 +1773,15 @@ function budgetColor(entry) {
   if (entry.kind === "debt") return PALETTE.coral;
   return PALETTE.inkSoft;
 }
+/* La limite affichée pour une enveloppe liée à une dette est TOUJOURS la mensualité actuelle de la dette
+   (jamais le capital, et jamais une valeur figée au moment de la création de l'enveloppe). */
+function budgetLimit(entry) {
+  if (entry.kind === "debt") {
+    const d = state.debts.find((x) => x.id === entry.debtId);
+    return d ? (d.minPayment || 0) : (entry.limit || 0);
+  }
+  return entry.limit || 0;
+}
 function budgetSpent(entry, monthTx, thisMonth) {
   if (entry.kind === "category") {
     return monthTx.filter((t) => t.category === entry.category).reduce((s, t) => s + Math.abs(t.amount), 0);
@@ -1854,24 +1866,26 @@ function renderBudget(root) {
                 <div class="row-main">
                   <div class="row-title">${escapeHtml(budgetLabel(b))}</div>
                   <form class="inline-form" data-edit-budget-form="${b.id}" style="border-top:none;padding-top:8px;">
-                    <input class="input" type="text" inputmode="decimal" name="limit" value="${b.limit}" placeholder="Limite mensuelle (€)" required />
+                    <input class="input" type="text" inputmode="decimal" name="limit" value="${budgetLimit(b)}" placeholder="Limite mensuelle (€)" required />
                     <button class="btn-primary" type="submit">${ICONS.save} Enregistrer</button>
                     <button class="btn-secondary" type="button" data-cancel-edit-budget="${b.id}">Annuler</button>
                   </form>
                 </div>
               </div>`;
             }
+            const limit = budgetLimit(b);
             const spent = budgetSpent(b, monthTx, thisMonth);
-            const pct = b.limit > 0 ? Math.min(100, (spent / b.limit) * 100) : 0;
-            const over = spent > b.limit;
+            const pct = limit > 0 ? Math.min(100, (spent / limit) * 100) : 0;
+            const over = spent > limit;
             return `<div class="row-item">
               <div class="row-main">
                 <div class="row-title">${escapeHtml(budgetLabel(b))}</div>
+                ${b.kind === "debt" ? `<div class="row-sub">Mensualité de la dette</div>` : ""}
                 <div class="pbar-track"><div class="pbar-fill" style="width:${pct}%;background:${over ? PALETTE.coral : budgetColor(b)}"></div></div>
-                <div class="row-sub mono">${fmt(spent)} / ${fmt(b.limit)}</div>
+                <div class="row-sub mono">${fmt(spent)} / ${fmt(limit)}</div>
               </div>
               <div class="row-actions">
-                <button class="icon-btn" data-edit-budget="${b.id}">${ICONS.edit}</button>
+                ${b.kind === "debt" ? "" : `<button class="icon-btn" data-edit-budget="${b.id}">${ICONS.edit}</button>`}
                 <button class="icon-btn" data-del-budget="${b.id}">${ICONS.trash}</button>
               </div>
             </div>`;
@@ -1893,7 +1907,7 @@ function renderBudget(root) {
       data: {
         labels: state.budgets.map((b) => budgetLabel(b)),
         datasets: [
-          { label: "Budget", data: state.budgets.map((b) => b.limit), backgroundColor: PALETTE.surfaceSoft, borderRadius: 6 },
+          { label: "Budget", data: state.budgets.map((b) => budgetLimit(b)), backgroundColor: PALETTE.surfaceSoft, borderRadius: 6 },
           { label: "Dépensé", data: state.budgets.map((b) => budgetSpent(b, monthTx, thisMonth)), backgroundColor: PALETTE.primary, borderRadius: 6 },
         ],
       },
@@ -2315,7 +2329,7 @@ function renderTransactions(root) {
   const monthTx = state.transactions.filter((t) => monthKey(t.date) === thisMonth);
   const varianceData = state.budgets.map((b) => {
     const spent = budgetSpent(b, monthTx, thisMonth);
-    return { label: budgetLabel(b), diff: b.limit - spent };
+    return { label: budgetLabel(b), diff: budgetLimit(b) - spent };
   });
 
   root.innerHTML = `
@@ -2450,6 +2464,295 @@ function renderTransactions(root) {
     if (subcategoryId) tx.subcategoryId = subcategoryId;
     persist({ ...state, transactions: [...state.transactions, tx] });
   });
+}
+
+/* --------------------------------- Simulateur --------------------------------- */
+/* Mensualité d'un prêt amortissable classique (formule standard d'amortissement) */
+function monthlyPayment(capital, annualRatePct, months) {
+  if (capital <= 0 || months <= 0) return 0;
+  const r = (annualRatePct / 100) / 12;
+  if (r === 0) return capital / months;
+  return (capital * r) / (1 - Math.pow(1 + r, -months));
+}
+/* Solde restant dû après un certain nombre de mensualités versées */
+function remainingBalance(capital, annualRatePct, totalMonths, elapsedMonths) {
+  if (elapsedMonths >= totalMonths) return 0;
+  const r = (annualRatePct / 100) / 12;
+  const m = monthlyPayment(capital, annualRatePct, totalMonths);
+  if (r === 0) return Math.max(0, capital - m * elapsedMonths);
+  const factor = Math.pow(1 + r, elapsedMonths);
+  return Math.max(0, capital * factor - (m * (factor - 1)) / r);
+}
+
+let simTool = "credit";
+
+function renderSimulator(root) {
+  root.innerHTML = `
+    <div class="view-stack">
+      <div class="mode-toggle" style="max-width:280px;">
+        <button type="button" class="mode-btn active">Immobilier</button>
+      </div>
+      <div class="mode-toggle" id="sim-tool-toggle" style="max-width:380px;">
+        <button type="button" class="mode-btn ${simTool === "credit" ? "active" : ""}" data-tool="credit">Crédit immobilier</button>
+        <button type="button" class="mode-btn ${simTool === "rent" ? "active" : ""}" data-tool="rent">Acheter ou louer</button>
+      </div>
+      <div id="sim-tool-root"></div>
+    </div>
+  `;
+
+  function paintTool() {
+    if (chartInstances.creditAmort) { chartInstances.creditAmort.destroy(); delete chartInstances.creditAmort; }
+    if (chartInstances.buyRent) { chartInstances.buyRent.destroy(); delete chartInstances.buyRent; }
+    const toolRoot = root.querySelector("#sim-tool-root");
+    if (simTool === "credit") renderCreditSimulator(toolRoot);
+    else renderBuyRentSimulator(toolRoot);
+  }
+
+  root.querySelectorAll("#sim-tool-toggle .mode-btn").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      simTool = btn.dataset.tool;
+      root.querySelectorAll("#sim-tool-toggle .mode-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      paintTool();
+    })
+  );
+
+  paintTool();
+}
+
+function field(label, name, value) {
+  return `<div>
+    <label class="row-sub" style="display:block;margin-bottom:4px;">${label}</label>
+    <input class="input" style="width:100%;" type="text" inputmode="decimal" name="${name}" value="${value}" />
+  </div>`;
+}
+
+/* ----- Outil 1 : Crédit immobilier ----- */
+function renderCreditSimulator(root) {
+  root.innerHTML = `
+    <div class="view-stack">
+      <div class="grid-2">
+        <div class="card">
+          <h3 class="card-title">Paramètres du prêt</h3>
+          <form id="credit-form" style="display:flex;flex-direction:column;gap:12px;">
+            ${field("Montant emprunté (€)", "capital", "200000")}
+            ${field("Taux d'intérêt annuel (%)", "taux", "3.5")}
+            ${field("Durée (années)", "duree", "20")}
+            ${field("Taux d'assurance emprunteur (%/an)", "assurance", "0.3")}
+          </form>
+        </div>
+        <div class="card">
+          <h3 class="card-title">Résultats</h3>
+          <div id="credit-results"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Répartition capital / intérêts remboursés par année</h3>
+        <div class="chart-wrap" style="height:280px;"><canvas id="chart-credit-amort"></canvas></div>
+      </div>
+    </div>
+  `;
+
+  function recompute() {
+    const fd = new FormData(root.querySelector("#credit-form"));
+    const capital = parseDecimal(fd.get("capital")) || 0;
+    const taux = parseDecimal(fd.get("taux")) || 0;
+    const duree = parseDecimal(fd.get("duree")) || 0;
+    const assurance = parseDecimal(fd.get("assurance")) || 0;
+    const months = Math.round(duree * 12);
+    const resultsEl = root.querySelector("#credit-results");
+
+    if (capital <= 0 || months <= 0) {
+      resultsEl.innerHTML = `<div class="empty-state">Renseignez un montant et une durée valides.</div>`;
+      if (chartInstances.creditAmort) { chartInstances.creditAmort.destroy(); delete chartInstances.creditAmort; }
+      return;
+    }
+
+    const r = (taux / 100) / 12;
+    const m = monthlyPayment(capital, taux, months);
+    const insuranceMonthly = capital * (assurance / 100) / 12;
+    const totalPaid = m * months;
+    const totalInterest = Math.max(0, totalPaid - capital);
+    const totalInsurance = insuranceMonthly * months;
+
+    let balance = capital;
+    const years = Math.ceil(months / 12);
+    const yearly = [];
+    for (let y = 0; y < years; y++) {
+      let principalPaid = 0, interestPaid = 0;
+      const monthsThisYear = Math.min(12, months - y * 12);
+      for (let k = 0; k < monthsThisYear; k++) {
+        const interest = balance * r;
+        const principal = m - interest;
+        balance = Math.max(0, balance - principal);
+        principalPaid += principal; interestPaid += interest;
+      }
+      yearly.push({ year: y + 1, principalPaid, interestPaid });
+    }
+
+    resultsEl.innerHTML = `
+      <div class="stat-row" style="grid-template-columns:1fr 1fr;">
+        <div class="stat-card">
+          <div class="stat-eyebrow">Mensualité hors assurance</div>
+          <div class="stat-number" style="font-size:19px;color:${PALETTE.primary}">${fmt2(m)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-eyebrow">Mensualité avec assurance</div>
+          <div class="stat-number" style="font-size:19px;">${fmt2(m + insuranceMonthly)}</div>
+        </div>
+      </div>
+      <div class="list" style="margin-top:8px;">
+        <div class="row-item"><div class="row-main"><div class="row-title">Coût total des intérêts</div></div><div class="row-amount mono" style="color:${PALETTE.coral}">${fmt2(totalInterest)}</div></div>
+        <div class="row-item"><div class="row-main"><div class="row-title">Coût total de l'assurance</div></div><div class="row-amount mono" style="color:${PALETTE.amber}">${fmt2(totalInsurance)}</div></div>
+        <div class="row-item"><div class="row-main"><div class="row-title">Coût total du crédit</div></div><div class="row-amount mono">${fmt2(totalInterest + totalInsurance)}</div></div>
+        <div class="row-item"><div class="row-main"><div class="row-title">Montant total remboursé</div></div><div class="row-amount mono">${fmt2(capital + totalInterest + totalInsurance)}</div></div>
+      </div>
+    `;
+
+    if (chartInstances.creditAmort) chartInstances.creditAmort.destroy();
+    chartInstances.creditAmort = new Chart(root.querySelector("#chart-credit-amort"), {
+      type: "bar",
+      data: {
+        labels: yearly.map((y) => `An ${y.year}`),
+        datasets: [
+          { label: "Capital remboursé", data: yearly.map((y) => y.principalPaid), backgroundColor: PALETTE.primary, stack: "s" },
+          { label: "Intérêts payés", data: yearly.map((y) => y.interestPaid), backgroundColor: PALETTE.coral, stack: "s" },
+        ],
+      },
+      options: {
+        plugins: { legend: { position: "bottom" }, tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}` } } },
+        scales: { x: { stacked: true, ticks: { font: { size: 10 } }, grid: { display: false } }, y: { stacked: true, ticks: { font: { family: "JetBrains Mono", size: 11 } }, grid: { color: PALETTE.line } } },
+        maintainAspectRatio: false,
+      },
+    });
+  }
+
+  root.querySelector("#credit-form").addEventListener("input", recompute);
+  recompute();
+}
+
+/* ----- Outil 2 : Acheter ou louer ----- */
+function renderBuyRentSimulator(root) {
+  root.innerHTML = `
+    <div class="view-stack">
+      <div class="grid-2">
+        <div class="card">
+          <h3 class="card-title">Paramètres</h3>
+          <form id="rent-form" style="display:flex;flex-direction:column;gap:10px;">
+            ${field("Prix du bien (€)", "prix", "250000")}
+            ${field("Apport personnel (€)", "apport", "25000")}
+            ${field("Taux du crédit (%)", "taux", "3.5")}
+            ${field("Durée du crédit (années)", "dureeCredit", "20")}
+            ${field("Frais de notaire (%)", "notaire", "7.5")}
+            ${field("Taxe foncière annuelle (€)", "taxe", "1200")}
+            ${field("Charges / entretien annuel (€)", "charges", "1000")}
+            ${field("Loyer mensuel équivalent (€)", "loyer", "850")}
+            ${field("Valorisation du bien (%/an)", "valorisation", "1")}
+            ${field("Rendement du placement (%/an)", "placement", "3")}
+            ${field("Durée de la simulation (années)", "dureeSim", "20")}
+          </form>
+        </div>
+        <div class="card">
+          <h3 class="card-title">Verdict</h3>
+          <div id="rent-results"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Patrimoine net : acheter vs louer + placer la différence</h3>
+        <div class="chart-wrap" style="height:280px;"><canvas id="chart-buy-rent"></canvas></div>
+      </div>
+    </div>
+  `;
+
+  function recompute() {
+    const fd = new FormData(root.querySelector("#rent-form"));
+    const g = (name) => parseDecimal(fd.get(name)) || 0;
+    const prix = g("prix"), apport = g("apport"), taux = g("taux"), dureeCredit = g("dureeCredit"),
+      notairePct = g("notaire"), taxe = g("taxe"), charges = g("charges"), loyer = g("loyer"),
+      valorisation = g("valorisation"), placement = g("placement"), dureeSim = g("dureeSim");
+
+    const resultsEl = root.querySelector("#rent-results");
+    const loanMonths = Math.round(dureeCredit * 12);
+    const simMonths = Math.round(dureeSim * 12);
+
+    if (prix <= 0 || loanMonths <= 0 || simMonths <= 0) {
+      resultsEl.innerHTML = `<div class="empty-state">Renseignez un prix, une durée de crédit et une durée de simulation valides.</div>`;
+      if (chartInstances.buyRent) { chartInstances.buyRent.destroy(); delete chartInstances.buyRent; }
+      return;
+    }
+
+    const loanAmount = Math.max(0, prix - apport);
+    const fraisNotaire = prix * (notairePct / 100);
+    const r = (taux / 100) / 12;
+    const m = monthlyPayment(loanAmount, taux, loanMonths);
+    const rPlacement = (placement / 100) / 12;
+    const monthlyTaxeCharges = (taxe + charges) / 12;
+
+    let balance = loanAmount;
+    let invested = apport + fraisNotaire;
+    const yearly = [];
+    for (let month = 1; month <= simMonths; month++) {
+      let mortgagePay = 0;
+      if (month <= loanMonths && balance > 0) {
+        const interest = balance * r;
+        const principal = m - interest;
+        balance = Math.max(0, balance - principal);
+        mortgagePay = m;
+      }
+      const ownCost = mortgagePay + monthlyTaxeCharges;
+      const diff = ownCost - loyer;
+      invested = invested * (1 + rPlacement) + diff;
+      if (month % 12 === 0) {
+        const year = month / 12;
+        const propValue = prix * Math.pow(1 + valorisation / 100, year);
+        const netBuy = propValue - balance - fraisNotaire;
+        yearly.push({ year, netBuy, netRent: invested });
+      }
+    }
+
+    const last = yearly[yearly.length - 1];
+    let crossYear = null;
+    for (const y of yearly) { if (y.netBuy >= y.netRent) { crossYear = y.year; break; } }
+    const verdict = crossYear
+      ? `Acheter devient plus avantageux à partir de la ${crossYear}ᵉ année.`
+      : `Sur ${dureeSim} ans, louer (et placer la différence) reste plus avantageux que d'acheter.`;
+
+    resultsEl.innerHTML = `
+      <div class="stat-row" style="grid-template-columns:1fr 1fr;">
+        <div class="stat-card">
+          <div class="stat-eyebrow">Patrimoine net en achetant (an ${dureeSim})</div>
+          <div class="stat-number" style="font-size:18px;color:${PALETTE.primary}">${fmt2(last.netBuy)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-eyebrow">Patrimoine net en louant + plaçant</div>
+          <div class="stat-number" style="font-size:18px;color:${PALETTE.cyan}">${fmt2(last.netRent)}</div>
+        </div>
+      </div>
+      <div class="empty-state" style="margin-top:12px;border-style:solid;background:${PALETTE.primarySoft};color:${PALETTE.ink};border-color:${PALETTE.primary};">
+        ${verdict}
+      </div>
+      <p class="hint-text">Frais de notaire estimés : ${fmt2(fraisNotaire)} · Mensualité du crédit : ${fmt2(m)} · Coût mensuel total (crédit + taxe + charges) : ${fmt2(m + monthlyTaxeCharges)}</p>
+    `;
+
+    if (chartInstances.buyRent) chartInstances.buyRent.destroy();
+    chartInstances.buyRent = new Chart(root.querySelector("#chart-buy-rent"), {
+      type: "line",
+      data: {
+        labels: yearly.map((y) => `An ${y.year}`),
+        datasets: [
+          { label: "Acheter (équité nette)", data: yearly.map((y) => y.netBuy), borderColor: PALETTE.primary, backgroundColor: "transparent", borderWidth: 2.5, tension: 0.25, pointRadius: 0 },
+          { label: "Louer + placer", data: yearly.map((y) => y.netRent), borderColor: PALETTE.cyan, backgroundColor: "transparent", borderWidth: 2.5, tension: 0.25, pointRadius: 0 },
+        ],
+      },
+      options: {
+        plugins: { legend: { position: "bottom" }, tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}` } } },
+        scales: { x: { ticks: { font: { size: 10 } }, grid: { display: false } }, y: { ticks: { font: { family: "JetBrains Mono", size: 11 } }, grid: { color: PALETTE.line } } },
+        maintainAspectRatio: false,
+      },
+    });
+  }
+
+  root.querySelector("#rent-form").addEventListener("input", recompute);
+  recompute();
 }
 
 /* --------------------------------- Configuration --------------------------------- */
