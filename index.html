@@ -728,9 +728,17 @@ const STORAGE_KEY = "finance-ledger-data";
 const uid = () => Math.random().toString(36).slice(2, 10);
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const monthKey = (iso) => iso.slice(0, 7);
-const fmt = (n) => (Number(n) || 0).toLocaleString("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
+const fmt = (n) => (Number(n) || 0).toLocaleString("fr-FR", { style: "currency", currency: "EUR", minimumFractionDigits: 0, maximumFractionDigits: 2 });
 const fmt2 = (n) => (Number(n) || 0).toLocaleString("fr-FR", { style: "currency", currency: "EUR" });
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+/* Convertit une saisie utilisateur en nombre, en acceptant le point ET la virgule comme séparateur décimal
+   (le clavier numérique iOS en français insère une virgule, que <input type="number"> refuse). */
+function parseDecimal(str) {
+  if (str === null || str === undefined) return NaN;
+  const normalized = String(str).trim().replace(",", ".").replace(/\s/g, "");
+  if (normalized === "") return NaN;
+  return parseFloat(normalized);
+}
 
 /* --------------------------------- Configuration --------------------------------- */
 function defaultConfig() {
@@ -1773,7 +1781,7 @@ function renderBudget(root) {
         </div>
         <form class="inline-form" id="form-budget">
           <select class="input" name="target">${budgetOptionsHtml()}</select>
-          <input class="input" type="number" name="limit" placeholder="Limite mensuelle (€)" min="0" step="any" required />
+          <input class="input" type="text" inputmode="decimal" name="limit" placeholder="Limite mensuelle (€)" required />
           <button class="btn-primary" type="submit">${ICONS.plus} Ajouter</button>
         </form>
         <p class="hint-text">Pour suivre une dette dans le budget, cochez « Suivre dans le budget » dans l'onglet Dettes — la ligne apparaîtra automatiquement ici.</p>
@@ -1805,7 +1813,7 @@ function renderBudget(root) {
   root.querySelector("#form-budget").addEventListener("submit", (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const limit = Number(fd.get("limit"));
+    const limit = parseDecimal(fd.get("limit"));
     if (!limit) return;
     const [kind, value] = fd.get("target").split(":");
     const entry = kind === "category" ? { id: uid(), kind: "category", category: value, limit } : { id: uid(), kind: "subcategory", subcategoryId: value, limit };
@@ -1841,7 +1849,7 @@ function renderSavings(root) {
         </div>`}
         <form class="inline-form" id="form-goal">
           <input class="input" name="name" placeholder="Nom de l'objectif" required />
-          <input class="input" type="number" name="target" placeholder="Objectif (€)" min="0" step="any" required />
+          <input class="input" type="text" inputmode="decimal" name="target" placeholder="Objectif (€)" required />
           <button class="btn-primary" type="submit">${ICONS.plus} Créer</button>
         </form>
       </div>
@@ -1858,7 +1866,7 @@ function renderSavings(root) {
     e.preventDefault();
     const fd = new FormData(e.target);
     const name = fd.get("name").trim();
-    const target = Number(fd.get("target"));
+    const target = parseDecimal(fd.get("target"));
     if (!name || !target) return;
     persist({ ...state, savingsGoals: [...state.savingsGoals, { id: uid(), name, target, current: 0 }] });
   });
@@ -1948,12 +1956,12 @@ function renderDebts(root) {
         </div>
         <form class="inline-form" id="form-debt">
           <input class="input" name="name" placeholder="Crédit/Dette" required />
-          <input class="input" type="number" step="any" name="capital" placeholder="Capital (€)" min="0" required />
-          <input class="input" type="number" step="any" name="interest" placeholder="Intérêts (€)" min="0" />
-          <input class="input" type="number" step="any" name="durationMonths" placeholder="Durée (en mois)" min="0" />
-          <input class="input" type="number" name="rate" placeholder="Taux (%)" min="0" step="any" />
-          <input class="input" type="number" step="any" name="minPayment" placeholder="Mensualité (€)" min="0" />
-          <input class="input" type="number" step="any" name="alreadyRepaid" placeholder="Déjà remboursé (€)" min="0" />
+          <input class="input" type="text" inputmode="decimal" name="capital" placeholder="Capital (€)" required />
+          <input class="input" type="text" inputmode="decimal" name="interest" placeholder="Intérêts (€)" />
+          <input class="input" type="text" inputmode="decimal" name="durationMonths" placeholder="Durée (en mois)" />
+          <input class="input" type="text" inputmode="decimal" name="rate" placeholder="Taux (%)" />
+          <input class="input" type="text" inputmode="decimal" name="minPayment" placeholder="Mensualité (€)" />
+          <input class="input" type="text" inputmode="decimal" name="alreadyRepaid" placeholder="Déjà remboursé (€)" />
           <button class="btn-primary" type="submit">${ICONS.plus} Ajouter</button>
         </form>
       </div>
@@ -2027,17 +2035,17 @@ function renderDebts(root) {
     e.preventDefault();
     const fd = new FormData(e.target);
     const name = fd.get("name").trim();
-    const capital = Number(fd.get("capital"));
+    const capital = parseDecimal(fd.get("capital"));
     if (!name || !capital) return;
-    const interest = Number(fd.get("interest")) || 0;
-    const alreadyRepaid = Number(fd.get("alreadyRepaid")) || 0;
-    const durationMonths = Number(fd.get("durationMonths")) || null;
+    const interest = parseDecimal(fd.get("interest")) || 0;
+    const alreadyRepaid = parseDecimal(fd.get("alreadyRepaid")) || 0;
+    const durationMonths = parseDecimal(fd.get("durationMonths")) || null;
     const total = capital + interest;
     persist({
       ...state,
       debts: [...state.debts, {
         id: uid(), name, capital, interest,
-        rate: Number(fd.get("rate")) || 0, minPayment: Number(fd.get("minPayment")) || 0,
+        rate: parseDecimal(fd.get("rate")) || 0, minPayment: parseDecimal(fd.get("minPayment")) || 0,
         durationMonths, includeInBudget: false,
         payments: alreadyRepaid > 0 ? [{ id: uid(), date: todayISO(), amount: Math.min(alreadyRepaid, total) }] : [],
       }],
@@ -2095,7 +2103,7 @@ function renderTransactions(root) {
           <select class="input" name="goalId" id="tx-goal" style="display:none;">${goalOptionsHtml()}</select>
           <select class="input" name="debtId" id="tx-debt" style="display:none;">${debtOptionsHtml()}</select>
           <select class="input" name="accountId" id="tx-account">${accountOptionsHtml()}</select>
-          <input class="input" type="number" name="amount" placeholder="Montant (€)" min="0" step="any" required />
+          <input class="input" type="text" inputmode="decimal" name="amount" placeholder="Montant (€)" required />
           <button class="btn-primary" type="submit">${ICONS.plus} Ajouter</button>
         </form>
         <p class="hint-text">Choisir « Épargne » ajoute le montant à l'objectif sélectionné ; choisir « Dettes » l'enregistre comme un remboursement — les graphiques des deux onglets se mettent à jour automatiquement.</p>
@@ -2148,7 +2156,7 @@ function renderTransactions(root) {
   root.querySelector("#form-tx").addEventListener("submit", (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const amount = Number(fd.get("amount"));
+    const amount = parseDecimal(fd.get("amount"));
     const description = fd.get("description").trim();
     if (!description || !amount) return;
     const category = fd.get("category");
