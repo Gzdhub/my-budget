@@ -1773,7 +1773,7 @@ function renderBudget(root) {
         </div>
         <form class="inline-form" id="form-budget">
           <select class="input" name="target">${budgetOptionsHtml()}</select>
-          <input class="input" type="number" name="limit" placeholder="Limite mensuelle (€)" min="0" step="1" required />
+          <input class="input" type="number" name="limit" placeholder="Limite mensuelle (€)" min="0" step="any" required />
           <button class="btn-primary" type="submit">${ICONS.plus} Ajouter</button>
         </form>
         <p class="hint-text">Pour suivre une dette dans le budget, cochez « Suivre dans le budget » dans l'onglet Dettes — la ligne apparaîtra automatiquement ici.</p>
@@ -1841,7 +1841,7 @@ function renderSavings(root) {
         </div>`}
         <form class="inline-form" id="form-goal">
           <input class="input" name="name" placeholder="Nom de l'objectif" required />
-          <input class="input" type="number" name="target" placeholder="Objectif (€)" min="0" step="1" required />
+          <input class="input" type="number" name="target" placeholder="Objectif (€)" min="0" step="any" required />
           <button class="btn-primary" type="submit">${ICONS.plus} Créer</button>
         </form>
       </div>
@@ -1948,12 +1948,12 @@ function renderDebts(root) {
         </div>
         <form class="inline-form" id="form-debt">
           <input class="input" name="name" placeholder="Crédit/Dette" required />
-          <input class="input" type="number" name="capital" placeholder="Capital (€)" min="0" required />
-          <input class="input" type="number" name="interest" placeholder="Intérêts (€)" min="0" />
-          <input class="input" type="number" name="durationMonths" placeholder="Durée (en mois)" min="0" />
-          <input class="input" type="number" name="rate" placeholder="Taux (%)" min="0" step="0.1" />
-          <input class="input" type="number" name="minPayment" placeholder="Mensualité (€)" min="0" />
-          <input class="input" type="number" name="alreadyRepaid" placeholder="Déjà remboursé (€)" min="0" />
+          <input class="input" type="number" step="any" name="capital" placeholder="Capital (€)" min="0" required />
+          <input class="input" type="number" step="any" name="interest" placeholder="Intérêts (€)" min="0" />
+          <input class="input" type="number" step="any" name="durationMonths" placeholder="Durée (en mois)" min="0" />
+          <input class="input" type="number" name="rate" placeholder="Taux (%)" min="0" step="any" />
+          <input class="input" type="number" step="any" name="minPayment" placeholder="Mensualité (€)" min="0" />
+          <input class="input" type="number" step="any" name="alreadyRepaid" placeholder="Déjà remboursé (€)" min="0" />
           <button class="btn-primary" type="submit">${ICONS.plus} Ajouter</button>
         </form>
       </div>
@@ -2095,7 +2095,7 @@ function renderTransactions(root) {
           <select class="input" name="goalId" id="tx-goal" style="display:none;">${goalOptionsHtml()}</select>
           <select class="input" name="debtId" id="tx-debt" style="display:none;">${debtOptionsHtml()}</select>
           <select class="input" name="accountId" id="tx-account">${accountOptionsHtml()}</select>
-          <input class="input" type="number" name="amount" placeholder="Montant (€)" min="0" step="0.01" required />
+          <input class="input" type="number" name="amount" placeholder="Montant (€)" min="0" step="any" required />
           <button class="btn-primary" type="submit">${ICONS.plus} Ajouter</button>
         </form>
         <p class="hint-text">Choisir « Épargne » ajoute le montant à l'objectif sélectionné ; choisir « Dettes » l'enregistre comme un remboursement — les graphiques des deux onglets se mettent à jour automatiquement.</p>
